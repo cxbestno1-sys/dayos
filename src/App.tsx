@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import './App.css'
 
 type Lang = 'zh' | 'en'
@@ -62,6 +62,10 @@ type DayOSSettings = {
   notesSync: boolean
   photoStorage: 'local' | 'cloud'
   aiEnabled: boolean
+  displayName: string
+  activeStart: string
+  activeEnd: string
+  onboardingComplete: boolean
   icloudAppleId: string
   icloudAppPassword: string
   remindersListName: string
@@ -100,7 +104,6 @@ const text = {
     agent: 'AI Agent',
     settings: '设置',
     commandCenter: '个人中枢',
-    greeting: '下午好，Cheng。',
     date: '2026年7月9日，星期四',
     livePlan: '今日动态计划',
     statusHeadline: '4 个日程，6 个任务，3 条新记录',
@@ -140,7 +143,6 @@ const text = {
     agent: 'AI Agent',
     settings: 'Settings',
     commandCenter: 'Personal command center',
-    greeting: 'Good afternoon, Cheng.',
     date: 'Thursday, July 9, 2026',
     livePlan: 'Live day plan',
     statusHeadline: '4 events, 6 tasks, 3 fresh notes',
@@ -252,6 +254,10 @@ const defaultDayOSSettings: DayOSSettings = {
   notesSync: false,
   photoStorage: 'local',
   aiEnabled: true,
+  displayName: '',
+  activeStart: '08:00',
+  activeEnd: '22:00',
+  onboardingComplete: false,
   icloudAppleId: '',
   icloudAppPassword: '',
   remindersListName: 'DayOS',
@@ -283,6 +289,59 @@ function getInitialLoginScene(): LoginScene {
   if (hour >= 10 && hour < 16) return 'noon'
   if (hour >= 16 && hour < 19) return 'evening'
   return 'night'
+}
+
+function timeToMinutes(time: string) {
+  const [rawHour, rawMinute] = time.split(':')
+  const hour = Number(rawHour)
+  const minute = Number(rawMinute)
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0
+  return Math.max(0, Math.min(1439, hour * 60 + minute))
+}
+
+function getActivityProgress(now: Date, activeStart: string, activeEnd: string) {
+  const start = timeToMinutes(activeStart)
+  let end = timeToMinutes(activeEnd)
+  let current = now.getHours() * 60 + now.getMinutes()
+
+  if (end <= start) {
+    end += 1440
+    if (current < start) current += 1440
+  }
+
+  if (current <= start) return 0
+  if (current >= end) return 100
+  return Math.round(((current - start) / (end - start)) * 100)
+}
+
+function getGreeting(now: Date, lang: Lang, displayName: string) {
+  const hour = now.getHours()
+  const name = displayName.trim() || (lang === 'zh' ? '你' : 'there')
+  if (lang === 'zh') {
+    if (hour >= 5 && hour < 11) return `上午好，${name}。`
+    if (hour >= 11 && hour < 13) return `中午好，${name}。`
+    if (hour >= 13 && hour < 19) return `下午好，${name}。`
+    return `晚上好，${name}。`
+  }
+
+  if (hour >= 5 && hour < 11) return `Good morning, ${name}.`
+  if (hour >= 11 && hour < 13) return `Good noon, ${name}.`
+  if (hour >= 13 && hour < 19) return `Good afternoon, ${name}.`
+  return `Good evening, ${name}.`
+}
+
+function useNow(refreshMs = 60_000) {
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(new Date())
+    }, refreshMs)
+
+    return () => window.clearInterval(timer)
+  }, [refreshMs])
+
+  return now
 }
 
 const iconPaths: Record<IconName, string> = {
@@ -339,6 +398,7 @@ function App() {
   const [prompt, setPrompt] = useState('')
   const [agentSource, setAgentSource] = useState<'Hermes' | 'OpenClaw'>('Hermes')
   const [aiDraft, setAiDraft] = useState(text.zh.aiDefault)
+  const [apiReady, setApiReady] = useState(false)
   const [calendarEvents, saveCalendarEvents] = useLocalStore('dayos.calendarEvents', defaultCalendarEvents)
   const [memos, saveMemos] = useLocalStore('dayos.memos', defaultMemos)
   const [journal, saveJournal] = useLocalStore('dayos.journal.2026-07-08', defaultJournal)
@@ -346,11 +406,14 @@ function App() {
   const [agentInbox, saveAgentInbox] = useLocalStore('dayos.agentInbox', defaultAgentInbox)
   const [agentConfig, saveAgentConfig] = useLocalStore('dayos.agentConfig', defaultAgentConfig)
   const [dayOSSettings, saveDayOSSettings] = useLocalStore('dayos.settings', defaultDayOSSettings)
+  const settings = { ...defaultDayOSSettings, ...dayOSSettings }
+  const now = useNow()
   const t = text[lang]
 
   useEffect(() => {
     if (!signedIn) return
     let active = true
+    setApiReady(false)
 
     async function loadApiState() {
       try {
@@ -368,6 +431,8 @@ function App() {
         setAgentSource(config.config.source)
       } catch (error) {
         console.warn('DayOS API unavailable, using local state.', error)
+      } finally {
+        if (active) setApiReady(true)
       }
     }
 
@@ -425,8 +490,25 @@ function App() {
     }
   }
 
+  async function saveDayOSSettingsToApi(nextSettings: DayOSSettings) {
+    try {
+      const result = await apiJson<{ settings: DayOSSettings }>('/api/settings', {
+        body: JSON.stringify(nextSettings),
+        method: 'PUT',
+      })
+      saveDayOSSettings({ ...defaultDayOSSettings, ...result.settings })
+    } catch (error) {
+      saveDayOSSettings(nextSettings)
+      console.warn('Settings API unavailable, saved locally.', error)
+    }
+  }
+
   if (!signedIn) {
     return <LoginScreen lang={lang} onLanguage={changeLanguage} onSignIn={() => setSignedIn(true)} />
+  }
+
+  if (apiReady && !settings.onboardingComplete) {
+    return <OnboardingScreen lang={lang} settings={settings} onLanguage={changeLanguage} onComplete={saveDayOSSettingsToApi} />
   }
 
   return (
@@ -460,7 +542,7 @@ function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{t.date}</p>
-            <h1>{page === 'today' ? t.greeting : pageTitle(page, lang)}</h1>
+            <h1>{page === 'today' ? getGreeting(now, lang, settings.displayName) : pageTitle(page, lang)}</h1>
           </div>
           <div className="topbar-actions">
             <button className="lang-button" type="button" onClick={() => changeLanguage(lang === 'zh' ? 'en' : 'zh')}>
@@ -493,7 +575,9 @@ function App() {
             mode={mode}
             photos={photos}
             prompt={prompt}
+            settings={settings}
             t={t}
+            now={now}
             visibleWidgets={visibleWidgets}
             widgets={widgets}
             onAgentSource={setAgentSource}
@@ -509,7 +593,7 @@ function App() {
             agentConfig={agentConfig}
             agentInbox={agentInbox}
             calendarEvents={calendarEvents}
-            dayOSSettings={dayOSSettings}
+            dayOSSettings={settings}
             journal={journal}
             lang={lang}
             memos={memos}
@@ -650,6 +734,92 @@ function LoginScreen({ lang, onLanguage, onSignIn }: { lang: Lang; onLanguage: (
   )
 }
 
+function OnboardingScreen({
+  lang,
+  settings,
+  onLanguage,
+  onComplete,
+}: {
+  lang: Lang
+  settings: DayOSSettings
+  onLanguage: (lang: Lang) => void
+  onComplete: (settings: DayOSSettings) => void
+}) {
+  const [displayName, setDisplayName] = useState(settings.displayName || '')
+  const [activeStart, setActiveStart] = useState(settings.activeStart || defaultDayOSSettings.activeStart)
+  const [activeEnd, setActiveEnd] = useState(settings.activeEnd || defaultDayOSSettings.activeEnd)
+  const [message, setMessage] = useState('')
+
+  function submitProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const cleanName = displayName.trim()
+    if (!cleanName) {
+      setMessage(lang === 'zh' ? '先告诉 DayOS 怎么称呼你。' : 'Tell DayOS what to call you first.')
+      return
+    }
+
+    onComplete({
+      ...settings,
+      displayName: cleanName,
+      activeStart,
+      activeEnd,
+      onboardingComplete: true,
+    })
+  }
+
+  return (
+    <main className="onboarding-screen">
+      <section className="onboarding-visual">
+        <div className="preview-topline">
+          <span className="brand-mark">D</span>
+          <span>DayOS</span>
+        </div>
+        <div>
+          <p className="eyebrow">{lang === 'zh' ? '首次设置' : 'First setup'}</p>
+          <h1>{lang === 'zh' ? '先让 DayOS 认识你。' : 'Let DayOS know your rhythm.'}</h1>
+          <p>{lang === 'zh' ? '你的称呼会用于今日问候；活动时间会用于计算今日进度。' : 'Your name powers the greeting; active hours drive day progress.'}</p>
+        </div>
+        <div className="onboarding-preview">
+          <span>{activeStart}</span>
+          <div><span style={{ width: '42%' }} /></div>
+          <span>{activeEnd}</span>
+        </div>
+      </section>
+
+      <section className="onboarding-panel">
+        <div className="login-heading-row">
+          <p className="eyebrow">{lang === 'zh' ? '个人节奏' : 'Personal rhythm'}</p>
+          <button className="lang-button" type="button" onClick={() => onLanguage(lang === 'zh' ? 'en' : 'zh')}>
+            {lang === 'zh' ? '中文' : 'EN'}
+          </button>
+        </div>
+        <h2>{lang === 'zh' ? '怎么称呼你？' : 'What should DayOS call you?'}</h2>
+        <form className="login-form" onSubmit={submitProfile}>
+          <label>
+            {lang === 'zh' ? '称呼' : 'Display name'}
+            <input autoFocus placeholder={lang === 'zh' ? '例如：Cheng' : 'e.g. Cheng'} value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </label>
+          <div className="time-field-row">
+            <label>
+              {lang === 'zh' ? '一般从几点开始活动' : 'Active from'}
+              <input type="time" value={activeStart} onChange={(event) => setActiveStart(event.target.value)} />
+            </label>
+            <label>
+              {lang === 'zh' ? '一般到几点结束' : 'Active until'}
+              <input type="time" value={activeEnd} onChange={(event) => setActiveEnd(event.target.value)} />
+            </label>
+          </div>
+          <button className="primary-button" type="submit">
+            <Icon name="check" />
+            <span>{lang === 'zh' ? '进入 DayOS' : 'Enter DayOS'}</span>
+          </button>
+          {message && <p className="login-message">{message}</p>}
+        </form>
+      </section>
+    </main>
+  )
+}
+
 function NavItem({ active, icon, label, onClick }: { active: boolean; icon: IconName; label: string; onClick: () => void }) {
   return (
     <button className={`nav-item ${active ? 'active' : ''}`} type="button" title={label} onClick={onClick}>
@@ -669,8 +839,10 @@ function TodayPage(props: {
   lang: Lang
   memos: MemoItem[]
   mode: ViewMode
+  now: Date
   photos: PhotoItem[]
   prompt: string
+  settings: DayOSSettings
   t: Record<string, string>
   visibleWidgets: Widget[]
   widgets: Widget[]
@@ -682,13 +854,11 @@ function TodayPage(props: {
   onSubmit: () => void
   onToggleWidget: (id: WidgetId) => void
 }) {
-  const { aiDraft, agentInbox, agentSource, calendarEvents, editMode, journal, lang, memos, mode, photos, prompt, t, visibleWidgets, widgets } = props
+  const { aiDraft, agentInbox, agentSource, calendarEvents, editMode, journal, lang, memos, mode, now, photos, prompt, settings, t, visibleWidgets, widgets } = props
   const todayEvents = calendarEvents
     .filter((event) => event.date === dayosToday)
     .sort((a, b) => a.time.localeCompare(b.time))
-  const dayProgress = todayEvents.length
-    ? Math.round(todayEvents.reduce((sum, event) => sum + event.progress, 0) / todayEvents.length)
-    : 0
+  const dayProgress = getActivityProgress(now, settings.activeStart, settings.activeEnd)
   const openEvents = todayEvents.filter((event) => event.progress < 100).length
   return (
     <>
@@ -703,8 +873,9 @@ function TodayPage(props: {
           <p>{t.statusCopy}</p>
         </div>
         <div className="day-meter" aria-label="Day progress">
-          <div className="meter-ring"><span>{dayProgress}%</span></div>
+          <div className="meter-ring" style={{ '--day-progress': `${dayProgress}%` } as CSSProperties}><span>{dayProgress}%</span></div>
           <p>{t.dayProgress}</p>
+          <small>{settings.activeStart} - {settings.activeEnd}</small>
         </div>
       </section>
 
@@ -1577,6 +1748,18 @@ function EditableSettings({
             <option value="zh">中文</option>
             <option value="en">English</option>
           </select>
+        </label>
+        <label>
+          {lang === 'zh' ? '称呼' : 'Display name'}
+          <input value={draftSettings.displayName} onChange={(event) => setDraftSettings({ ...draftSettings, displayName: event.target.value })} />
+        </label>
+        <label>
+          {lang === 'zh' ? '活动开始时间' : 'Active start'}
+          <input type="time" value={draftSettings.activeStart} onChange={(event) => setDraftSettings({ ...draftSettings, activeStart: event.target.value })} />
+        </label>
+        <label>
+          {lang === 'zh' ? '活动结束时间' : 'Active end'}
+          <input type="time" value={draftSettings.activeEnd} onChange={(event) => setDraftSettings({ ...draftSettings, activeEnd: event.target.value })} />
         </label>
         <label>
           {lang === 'zh' ? '照片存储' : 'Photo storage'}
