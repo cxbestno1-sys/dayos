@@ -417,17 +417,23 @@ function App() {
 
     async function loadApiState() {
       try {
-        const [messages, config, settings, calendar] = await Promise.all([
+        const [messages, config, settings, calendar, apiMemos, apiJournal, apiPhotos] = await Promise.all([
           apiJson<{ messages: AgentInboxItem[] }>('/api/agent/messages'),
           apiJson<{ config: AgentConfig }>('/api/agent/config'),
           apiJson<{ settings: DayOSSettings }>('/api/settings'),
           apiJson<{ events: CalendarEvent[] }>('/api/calendar/events'),
+          apiJson<{ memos: MemoItem[] }>('/api/memos'),
+          apiJson<{ journal: string }>('/api/journal'),
+          apiJson<{ photos: PhotoItem[] }>('/api/photos'),
         ])
         if (!active) return
         saveAgentInbox(messages.messages)
         saveAgentConfig(config.config)
         saveDayOSSettings(settings.settings)
         saveCalendarEvents(calendar.events)
+        saveMemos(apiMemos.memos)
+        saveJournal(apiJournal.journal)
+        savePhotos(apiPhotos.photos)
         setAgentSource(config.config.source)
       } catch (error) {
         console.warn('DayOS API unavailable, using local state.', error)
@@ -440,7 +446,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [signedIn, saveAgentInbox, saveAgentConfig, saveCalendarEvents, saveDayOSSettings])
+  }, [signedIn, saveAgentInbox, saveAgentConfig, saveCalendarEvents, saveDayOSSettings, saveMemos, saveJournal, savePhotos])
 
   const visibleWidgets = useMemo(
     () =>
@@ -487,6 +493,45 @@ function App() {
     } catch (error) {
       saveCalendarEvents(events)
       console.warn('Calendar API unavailable, saved locally.', error)
+    }
+  }
+
+  async function saveMemosToApi(memos: MemoItem[]) {
+    try {
+      const result = await apiJson<{ memos: MemoItem[] }>('/api/memos', {
+        body: JSON.stringify({ memos }),
+        method: 'PUT',
+      })
+      saveMemos(result.memos)
+    } catch (error) {
+      saveMemos(memos)
+      console.warn('Memos API unavailable, saved locally.', error)
+    }
+  }
+
+  async function saveJournalToApi(nextJournal: string) {
+    try {
+      const result = await apiJson<{ journal: string }>('/api/journal', {
+        body: JSON.stringify({ journal: nextJournal, date: dayosToday }),
+        method: 'PUT',
+      })
+      saveJournal(result.journal)
+    } catch (error) {
+      saveJournal(nextJournal)
+      console.warn('Journal API unavailable, saved locally.', error)
+    }
+  }
+
+  async function savePhotosToApi(nextPhotos: PhotoItem[]) {
+    try {
+      const result = await apiJson<{ photos: PhotoItem[] }>('/api/photos', {
+        body: JSON.stringify({ photos: nextPhotos }),
+        method: 'PUT',
+      })
+      savePhotos(result.photos)
+    } catch (error) {
+      savePhotos(nextPhotos)
+      console.warn('Photos API unavailable, saved locally.', error)
     }
   }
 
@@ -604,9 +649,9 @@ function App() {
             onAgentInbox={saveAgentInbox}
             onCalendarEvents={saveCalendarEventsToApi}
             onDayOSSettings={saveDayOSSettings}
-            onJournal={saveJournal}
-            onMemos={saveMemos}
-            onPhotos={savePhotos}
+            onJournal={saveJournalToApi}
+            onMemos={saveMemosToApi}
+            onPhotos={savePhotosToApi}
           />
         )}
       </section>

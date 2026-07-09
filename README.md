@@ -17,10 +17,15 @@ Services:
 
 ## API Token
 
-Set this before deploying:
+Set these before deploying:
 
 ```bash
 export DAYOS_API_TOKEN="replace-with-a-long-random-token"
+export DAYOS_DB_HOST="127.0.0.1"
+export DAYOS_DB_PORT="3306"
+export DAYOS_DB_USER="dayos"
+export DAYOS_DB_PASSWORD="your-db-password"
+export DAYOS_DB_NAME="dayos"
 ```
 
 Hermes push example:
@@ -45,7 +50,7 @@ Recommended layout:
 /www/wwwroot/dayos
   dist/
   server/
-  data/
+  deploy/mysql-schema.sql
   package.json
   ecosystem.config.cjs
 ```
@@ -53,8 +58,10 @@ Recommended layout:
 Steps:
 
 1. Install Node.js in BT Panel.
-2. Upload or clone this project to `/www/wwwroot/dayos`.
-3. Run:
+2. Install MySQL in BT Panel.
+3. Create a MySQL database named `dayos`, then import `deploy/mysql-schema.sql`.
+4. Upload or clone this project to `/www/wwwroot/dayos`.
+5. Run:
 
 ```bash
 cd /www/wwwroot/dayos
@@ -62,11 +69,23 @@ npm install
 npm run build
 ```
 
-4. In BT PM2 Manager, start `ecosystem.config.cjs`.
-5. Replace `change-this-token-before-deploy` in `ecosystem.config.cjs`.
-6. In BT website config, set site root to `/www/wwwroot/dayos/dist`.
-7. Add the Nginx proxy from `deploy/nginx-dayos.conf`.
-8. Enable HTTPS in BT Panel.
+6. Replace `change-this-token-before-deploy` and MySQL credentials in `ecosystem.config.cjs`.
+7. In BT PM2 Manager, start `ecosystem.config.cjs`.
+8. In BT website config, set site root to `/www/wwwroot/dayos/dist`.
+9. Add the Nginx proxy from `deploy/nginx-dayos.conf`.
+10. Enable HTTPS in BT Panel.
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8787/api/health
+```
+
+With MySQL enabled it should include:
+
+```json
+{"storage":"mysql"}
+```
 
 ## Apple Reminders Sync
 
@@ -88,10 +107,26 @@ Use an Apple app-specific password, not your normal iCloud password.
 
 ## Data Storage
 
-Current API storage:
+Production storage is MySQL when these environment variables are set:
+
+```bash
+DAYOS_DB_HOST
+DAYOS_DB_PORT
+DAYOS_DB_USER
+DAYOS_DB_PASSWORD
+DAYOS_DB_NAME
+```
+
+Tables are defined in:
+
+```text
+deploy/mysql-schema.sql
+```
+
+If MySQL is not configured or is unavailable, the API falls back to local JSON:
 
 ```text
 data/dayos.json
 ```
 
-This is ignored by git. For production, back up `data/` or migrate it to PostgreSQL.
+Use the JSON fallback only for local development or emergency recovery. For production, keep MySQL backups enabled in BT Panel.
