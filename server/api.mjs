@@ -12,10 +12,11 @@ const defaultUserEmail = process.env.DAYOS_DEFAULT_USER_EMAIL || 'test@dayos.loc
 const journalDate = '2026-07-09'
 
 const defaultState = {
-  memos: [
-    { id: 'memo-1', title: 'DayOS API', body: '设计日历、备忘录、日记、照片和 AI Agent 的数据接口。' },
-    { id: 'memo-2', title: 'Apple Notes bridge', body: '第二阶段用 macOS helper 或 AppleScript 做同步桥接。' },
-    { id: 'memo-3', title: 'AI scheduling rules', body: '用户确认后再写入日历，避免 AI 自动覆盖安排。' },
+  projects: [
+    {
+      id: 'project-words', title: '三个月背 3000 个单词', goal: '每天完成 34 个新词，并安排复习。', startDate: '2026-07-01', endDate: '2026-09-30',
+      tasks: [{ id: 'word-1', date: '2026-07-09', title: '第 9 天：学习 34 个新词并复习昨日单词', done: false }],
+    },
   ],
   journal: '上午：完成首页模块化。中午：记录午餐照片。下午：整理 AI Agent 接入方式。',
   photos: [],
@@ -138,7 +139,7 @@ function mergeState(state) {
     ...state,
     agentConfig: { ...defaultState.agentConfig, ...(state.agentConfig || {}) },
     settings: { ...defaultState.settings, ...(state.settings || {}) },
-    memos: state.memos || defaultState.memos,
+    projects: state.projects || defaultState.projects,
     journal: typeof state.journal === 'string' ? state.journal : defaultState.journal,
     photos: state.photos || defaultState.photos,
     calendarEvents: state.calendarEvents || defaultState.calendarEvents,
@@ -175,12 +176,18 @@ function normalizeCalendarEvents(events) {
   }))
 }
 
-function normalizeMemos(memos) {
-  if (!Array.isArray(memos)) return []
-  return memos.map((memo) => ({
-    id: String(memo.id || `memo-${Date.now()}`),
-    title: String(memo.title || 'Untitled memo'),
-    body: String(memo.body || ''),
+function normalizeProjects(projects) {
+  if (!Array.isArray(projects)) return []
+  return projects.map((project) => ({
+    id: String(project.id || `project-${Date.now()}`),
+    title: String(project.title || 'Untitled project'),
+    goal: String(project.goal || ''),
+    startDate: String(project.startDate || new Date().toISOString().slice(0, 10)),
+    endDate: String(project.endDate || project.startDate || new Date().toISOString().slice(0, 10)),
+    tasks: Array.isArray(project.tasks) ? project.tasks.map((task) => ({
+      id: String(task.id || `task-${Date.now()}`), title: String(task.title || 'Untitled task'),
+      date: String(task.date || project.startDate || new Date().toISOString().slice(0, 10)), done: normalizeBoolean(task.done),
+    })) : [],
   }))
 }
 
@@ -315,7 +322,9 @@ async function readDbState() {
 
 async function readState() {
   const dbState = await readDbState()
-  return dbState || readJsonState()
+  if (!dbState) return readJsonState()
+  const jsonState = await readJsonState()
+  return { ...dbState, projects: jsonState.projects }
 }
 
 async function replaceCalendarEvents(events) {
@@ -339,24 +348,10 @@ async function replaceCalendarEvents(events) {
   return normalized
 }
 
-async function replaceMemos(memos) {
-  const normalized = normalizeMemos(memos)
-  const saved = await withDb(async (db) => {
-    const userId = await ensureDefaultUser(db)
-    await db.execute('DELETE FROM memos WHERE user_id = :userId', { userId })
-    for (const [index, memo] of normalized.entries()) {
-      await db.execute(
-        `INSERT INTO memos (user_id, external_id, title, body, sort_order)
-         VALUES (:userId, :id, :title, :body, :sortOrder)`,
-        { userId, ...memo, sortOrder: index },
-      )
-    }
-    return normalized
-  })
-  if (saved) return saved
-
+async function replaceProjects(projects) {
+  const normalized = normalizeProjects(projects)
   const state = await readJsonState()
-  await writeJsonState({ ...state, memos: normalized })
+  await writeJsonState({ ...state, projects: normalized })
   return normalized
 }
 
@@ -398,6 +393,47 @@ async function replacePhotos(photos) {
   const state = await readJsonState()
   await writeJsonState({ ...state, photos: normalized })
   return normalized
+}
+
+async function analyzePhotoWithAi({ src, label, note }, config) {
+  if (!config?.apiKey || !config?.apiEndpoint) {
+    throw new Error('AI endpoint and API key are required for photo analysis')
+  }
+
+  const response = await fetch(`${String(config.apiEndpoint).replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.model || 'gpt-4.1-mini',
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: 'You identify personal photos. Return only JSON with string fields label and note. For food, estimate calories as a range and name the food. For scenes, describe the likely place or landmark only when visually supported; otherwise say the location is unknown. Respond in the user\'s language when possible.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Existing label: ${String(label || '')}. Existing note: ${String(note || '')}. Analyze this image for a personal photo log.` },
+            { type: 'image_url', image_url: { url: String(src) } },
+          ],
+        },
+      ],
+    }),
+  })
+  if (!response.ok) throw new Error(`AI photo analysis failed: ${response.status}`)
+  const payload = await response.json()
+  const content = payload?.choices?.[0]?.message?.content
+  if (typeof content !== 'string') throw new Error('AI photo analysis returned no content')
+  const parsed = JSON.parse(content.replace(/^```json\s*|\s*```$/g, ''))
+  return {
+    label: String(parsed.label || label || 'Photo'),
+    note: String(parsed.note || note || ''),
+  }
 }
 
 async function saveAgentConfig(config) {
@@ -521,14 +557,14 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/memos') {
-      json(res, 200, { memos: state.memos || [] })
+    if (req.method === 'GET' && url.pathname === '/api/projects') {
+      json(res, 200, { projects: state.projects || [] })
       return
     }
 
-    if (req.method === 'PUT' && url.pathname === '/api/memos') {
+    if (req.method === 'PUT' && url.pathname === '/api/projects') {
       const body = await readBody(req)
-      json(res, 200, { memos: await replaceMemos(body.memos) })
+      json(res, 200, { projects: await replaceProjects(body.projects) })
       return
     }
 
@@ -551,6 +587,12 @@ const server = createServer(async (req, res) => {
     if (req.method === 'PUT' && url.pathname === '/api/photos') {
       const body = await readBody(req)
       json(res, 200, { photos: await replacePhotos(body.photos) })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/photos/analyze') {
+      const body = await readBody(req)
+      json(res, 200, await analyzePhotoWithAi(body, state.agentConfig))
       return
     }
 

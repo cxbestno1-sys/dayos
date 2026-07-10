@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type For
 import './App.css'
 
 type Lang = 'zh' | 'en'
-type Page = 'today' | 'calendar' | 'memo' | 'journal' | 'photos' | 'agent' | 'settings'
+type Page = 'today' | 'calendar' | 'projects' | 'journal' | 'photos' | 'agent' | 'settings'
 type ViewMode = 'work' | 'life' | 'review'
 type WidgetSize = 'compact' | 'wide' | 'tall'
 type Category = 'work' | 'life' | 'health' | 'agent'
-type WidgetId = 'timeline' | 'tasks' | 'agent' | 'memo' | 'journal' | 'photos' | 'health' | 'summary'
+type WidgetId = 'timeline' | 'agent' | 'projects' | 'journal' | 'photos' | 'health' | 'summary'
 type LoginScene = 'morning' | 'noon' | 'evening' | 'night'
 
 type Widget = {
@@ -24,10 +24,20 @@ type CalendarEvent = {
   progress: number
 }
 
-type MemoItem = {
+type ProjectTask = {
   id: string
   title: string
-  body: string
+  date: string
+  done: boolean
+}
+
+type ProjectPlan = {
+  id: string
+  title: string
+  goal: string
+  startDate: string
+  endDate: string
+  tasks: ProjectTask[]
 }
 
 type PhotoItem = {
@@ -92,13 +102,13 @@ const text = {
   zh: {
     signIn: '登录 DayOS',
     privateBeta: '私人工作台',
-    loginSubtitle: '管理日历、备忘录、日记、照片、AI Agent 和自动排程。',
+    loginSubtitle: '管理日历、项目计划、日记、照片、AI Agent 和自动排程。',
     enter: '进入工作台',
     email: '邮箱',
     password: '密码',
     today: '今日',
     calendar: '日历',
-    memo: '备忘录',
+    projects: '项目计划',
     journal: '日记',
     photos: '照片',
     agent: 'AI Agent',
@@ -107,7 +117,7 @@ const text = {
     date: '2026年7月9日，星期四',
     livePlan: '今日动态计划',
     statusHeadline: '4 个日程，6 个任务，3 条新记录',
-    statusCopy: '今日首页会同步读取日历、备忘录、日记、照片和 AI Agent 的最新保存内容。',
+    statusCopy: '今日首页会同步读取日历、项目计划、日记、照片和 AI Agent 的最新保存内容。',
     dayProgress: '今日进度',
     commandPlaceholder: '告诉 DayOS 要安排、记录或总结什么...',
     aiDefault: '把粗略安排发给 DayOS，它会拆成日历、备忘录、日记和 Agent 任务。',
@@ -131,13 +141,13 @@ const text = {
   en: {
     signIn: 'Sign in to DayOS',
     privateBeta: 'Private workspace',
-    loginSubtitle: 'Manage calendar, memo, journal, photos, AI Agent, and scheduling.',
+    loginSubtitle: 'Manage calendar, project plans, journal, photos, AI Agent, and scheduling.',
     enter: 'Enter workspace',
     email: 'Email',
     password: 'Password',
     today: 'Today',
     calendar: 'Calendar',
-    memo: 'Memo',
+    projects: 'Projects',
     journal: 'Journal',
     photos: 'Photos',
     agent: 'AI Agent',
@@ -146,7 +156,7 @@ const text = {
     date: 'Thursday, July 9, 2026',
     livePlan: 'Live day plan',
     statusHeadline: '4 events, 6 tasks, 3 fresh notes',
-    statusCopy: 'Today home syncs with the latest saved calendar, memos, journal, photos, and AI Agent data.',
+    statusCopy: 'Today home syncs with the latest saved calendar, projects, journal, photos, and AI Agent data.',
     dayProgress: 'Day progress',
     commandPlaceholder: 'Tell DayOS what to arrange, record, or summarize...',
     aiDefault: 'Send a rough plan and DayOS will turn it into calendar blocks, notes, journal entries, and Agent tasks.',
@@ -171,20 +181,18 @@ const text = {
 
 const widgetLabels = {
   zh: {
-    timeline: ['今日时间线', '日程'],
-    tasks: ['事项进度', '计划'],
+    timeline: ['今日安排', '时间线与进度'],
     agent: ['AI Agent 消息', 'Hermes / OpenClaw'],
-    memo: ['快速备忘录', '备忘'],
+    projects: ['项目计划', '长期目标'],
     journal: ['每日记录', '日记'],
     photos: ['照片记录', '生活'],
     health: ['能量状态', 'HealthKit 预留'],
     summary: ['AI 复盘', '总结'],
   },
   en: {
-    timeline: ['Today Timeline', 'Schedule'],
-    tasks: ['Progress Tasks', 'Plan'],
+    timeline: ['Today Plan', 'Timeline & progress'],
     agent: ['AI Agent Inbox', 'Hermes / OpenClaw'],
-    memo: ['Quick Memo', 'Notes'],
+    projects: ['Project Plans', 'Long-term goals'],
     journal: ['Daily Journal', 'Log'],
     photos: ['Photo Log', 'Life'],
     health: ['Energy Check', 'Health ready'],
@@ -194,9 +202,8 @@ const widgetLabels = {
 
 const widgetsSeed: Widget[] = [
   { id: 'timeline', size: 'wide', enabled: true },
-  { id: 'tasks', size: 'compact', enabled: true },
   { id: 'agent', size: 'compact', enabled: true },
-  { id: 'memo', size: 'compact', enabled: true },
+  { id: 'projects', size: 'wide', enabled: true },
   { id: 'journal', size: 'wide', enabled: true },
   { id: 'photos', size: 'compact', enabled: true },
   { id: 'health', size: 'compact', enabled: false },
@@ -210,10 +217,23 @@ const defaultCalendarEvents: CalendarEvent[] = [
   { id: 'event-4', date: '2026-07-10', time: '10:00', title: '整理宝塔部署配置', category: 'work', progress: 10 },
 ]
 
-const defaultMemos: MemoItem[] = [
-  { id: 'memo-1', title: 'DayOS API', body: '设计日历、备忘录、日记、照片和 AI Agent 的数据接口。' },
-  { id: 'memo-2', title: 'Apple Notes bridge', body: '第二阶段用 macOS helper 或 AppleScript 做同步桥接。' },
-  { id: 'memo-3', title: 'AI scheduling rules', body: '用户确认后再写入日历，避免 AI 自动覆盖安排。' },
+const defaultProjects: ProjectPlan[] = [
+  {
+    id: 'project-words', title: '三个月背 3000 个单词', goal: '每天完成 34 个新词，并安排复习。', startDate: '2026-07-01', endDate: '2026-09-30',
+    tasks: [
+      { id: 'word-1', date: '2026-07-09', title: '第 9 天：学习 34 个新词并复习昨日单词', done: false },
+      { id: 'word-2', date: '2026-07-10', title: '第 10 天：学习 34 个新词并复习', done: false },
+    ],
+  },
+  {
+    id: 'project-trip', title: '四天城市旅行', goal: '7 月 9 日出发，7 月 12 日返程；每天完成景点打卡。', startDate: '2026-07-09', endDate: '2026-07-12',
+    tasks: [
+      { id: 'trip-1', date: '2026-07-09', title: 'Day 1：抵达、办理入住、打卡老城区', done: false },
+      { id: 'trip-2', date: '2026-07-10', title: 'Day 2：打卡博物馆与城市公园', done: false },
+      { id: 'trip-3', date: '2026-07-11', title: 'Day 3：打卡主景点与夜市', done: false },
+      { id: 'trip-4', date: '2026-07-12', title: 'Day 4：返程前打卡最后一个景点', done: false },
+    ],
+  },
 ]
 
 const defaultJournal = '上午：完成首页模块化。中午：记录午餐照片。下午：整理 AI Agent 接入方式。'
@@ -400,7 +420,7 @@ function App() {
   const [aiDraft, setAiDraft] = useState(text.zh.aiDefault)
   const [apiReady, setApiReady] = useState(false)
   const [calendarEvents, saveCalendarEvents] = useLocalStore('dayos.calendarEvents', defaultCalendarEvents)
-  const [memos, saveMemos] = useLocalStore('dayos.memos', defaultMemos)
+  const [projects, saveProjects] = useLocalStore('dayos.projects', defaultProjects)
   const [journal, saveJournal] = useLocalStore('dayos.journal.2026-07-08', defaultJournal)
   const [photos, savePhotos] = useLocalStore('dayos.photos', defaultPhotos)
   const [agentInbox, saveAgentInbox] = useLocalStore('dayos.agentInbox', defaultAgentInbox)
@@ -417,12 +437,12 @@ function App() {
 
     async function loadApiState() {
       try {
-        const [messages, config, settings, calendar, apiMemos, apiJournal, apiPhotos] = await Promise.all([
+        const [messages, config, settings, calendar, apiProjects, apiJournal, apiPhotos] = await Promise.all([
           apiJson<{ messages: AgentInboxItem[] }>('/api/agent/messages'),
           apiJson<{ config: AgentConfig }>('/api/agent/config'),
           apiJson<{ settings: DayOSSettings }>('/api/settings'),
           apiJson<{ events: CalendarEvent[] }>('/api/calendar/events'),
-          apiJson<{ memos: MemoItem[] }>('/api/memos'),
+          apiJson<{ projects: ProjectPlan[] }>('/api/projects'),
           apiJson<{ journal: string }>('/api/journal'),
           apiJson<{ photos: PhotoItem[] }>('/api/photos'),
         ])
@@ -431,7 +451,7 @@ function App() {
         saveAgentConfig(config.config)
         saveDayOSSettings(settings.settings)
         saveCalendarEvents(calendar.events)
-        saveMemos(apiMemos.memos)
+        saveProjects(apiProjects.projects)
         saveJournal(apiJournal.journal)
         savePhotos(apiPhotos.photos)
         setAgentSource(config.config.source)
@@ -446,7 +466,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [signedIn, saveAgentInbox, saveAgentConfig, saveCalendarEvents, saveDayOSSettings, saveMemos, saveJournal, savePhotos])
+  }, [signedIn, saveAgentInbox, saveAgentConfig, saveCalendarEvents, saveDayOSSettings, saveProjects, saveJournal, savePhotos])
 
   const visibleWidgets = useMemo(
     () =>
@@ -479,7 +499,7 @@ function App() {
       setAiDraft(t.aiEmpty)
       return
     }
-    setAiDraft(`${t.draftCreated}: "${cleanPrompt}". ${agentSource} -> calendar, memo, journal, task.`)
+    setAiDraft(`${t.draftCreated}: "${cleanPrompt}". ${agentSource} -> calendar, project, journal, task.`)
     setPrompt('')
   }
 
@@ -496,16 +516,16 @@ function App() {
     }
   }
 
-  async function saveMemosToApi(memos: MemoItem[]) {
+  async function saveProjectsToApi(projects: ProjectPlan[]) {
     try {
-      const result = await apiJson<{ memos: MemoItem[] }>('/api/memos', {
-        body: JSON.stringify({ memos }),
+      const result = await apiJson<{ projects: ProjectPlan[] }>('/api/projects', {
+        body: JSON.stringify({ projects }),
         method: 'PUT',
       })
-      saveMemos(result.memos)
+      saveProjects(result.projects)
     } catch (error) {
-      saveMemos(memos)
-      console.warn('Memos API unavailable, saved locally.', error)
+      saveProjects(projects)
+      console.warn('Projects API unavailable, saved locally.', error)
     }
   }
 
@@ -570,7 +590,7 @@ function App() {
         <nav className="nav-list">
           <NavItem active={page === 'today'} icon="sun" label={t.today} onClick={() => setPage('today')} />
           <NavItem active={page === 'calendar'} icon="calendar" label={t.calendar} onClick={() => setPage('calendar')} />
-          <NavItem active={page === 'memo'} icon="note" label={t.memo} onClick={() => setPage('memo')} />
+          <NavItem active={page === 'projects'} icon="note" label={t.projects} onClick={() => setPage('projects')} />
           <NavItem active={page === 'journal'} icon="edit" label={t.journal} onClick={() => setPage('journal')} />
           <NavItem active={page === 'photos'} icon="image" label={t.photos} onClick={() => setPage('photos')} />
           <NavItem active={page === 'agent'} icon="message" label={t.agent} onClick={() => setPage('agent')} />
@@ -616,7 +636,7 @@ function App() {
             editMode={editMode}
             journal={journal}
             lang={lang}
-            memos={memos}
+            projects={projects}
             mode={mode}
             photos={photos}
             prompt={prompt}
@@ -630,6 +650,7 @@ function App() {
             onNavigate={setPage}
             onMode={setMode}
             onPrompt={setPrompt}
+            onProjects={saveProjectsToApi}
             onSubmit={handleAiSubmit}
             onToggleWidget={toggleWidget}
           />
@@ -641,7 +662,7 @@ function App() {
             dayOSSettings={settings}
             journal={journal}
             lang={lang}
-            memos={memos}
+            projects={projects}
             page={page}
             photos={photos}
             onAgentSource={setAgentSource}
@@ -650,7 +671,7 @@ function App() {
             onCalendarEvents={saveCalendarEventsToApi}
             onDayOSSettings={saveDayOSSettings}
             onJournal={saveJournalToApi}
-            onMemos={saveMemosToApi}
+            onProjects={saveProjectsToApi}
             onPhotos={savePhotosToApi}
           />
         )}
@@ -882,7 +903,7 @@ function TodayPage(props: {
   editMode: boolean
   journal: string
   lang: Lang
-  memos: MemoItem[]
+  projects: ProjectPlan[]
   mode: ViewMode
   now: Date
   photos: PhotoItem[]
@@ -896,15 +917,15 @@ function TodayPage(props: {
   onNavigate: (page: Page) => void
   onMode: (mode: ViewMode) => void
   onPrompt: (value: string) => void
+  onProjects: (projects: ProjectPlan[]) => void
   onSubmit: () => void
   onToggleWidget: (id: WidgetId) => void
 }) {
-  const { aiDraft, agentInbox, agentSource, calendarEvents, editMode, journal, lang, memos, mode, now, photos, prompt, settings, t, visibleWidgets, widgets } = props
+  const { aiDraft, agentInbox, agentSource, calendarEvents, editMode, journal, lang, projects, mode, now, photos, prompt, settings, t, visibleWidgets, widgets } = props
   const todayEvents = calendarEvents
     .filter((event) => event.date === dayosToday)
     .sort((a, b) => a.time.localeCompare(b.time))
   const dayProgress = getActivityProgress(now, settings.activeStart, settings.activeEnd)
-  const openEvents = todayEvents.filter((event) => event.progress < 100).length
   return (
     <>
       <section className="status-band" aria-label="Today status">
@@ -912,8 +933,8 @@ function TodayPage(props: {
           <p className="eyebrow">{t.livePlan}</p>
           <h2>
             {lang === 'zh'
-              ? `${todayEvents.length} 个日程，${memos.length} 条备忘录，${agentInbox.length} 条 Agent 消息`
-              : `${todayEvents.length} events, ${memos.length} memos, ${agentInbox.length} Agent messages`}
+              ? `${todayEvents.length} 个日程，${projects.length} 个项目，${agentInbox.length} 条 Agent 消息`
+              : `${todayEvents.length} events, ${projects.length} projects, ${agentInbox.length} Agent messages`}
           </h2>
           <p>{t.statusCopy}</p>
         </div>
@@ -971,11 +992,11 @@ function TodayPage(props: {
             journal={journal}
             key={widget.id}
             lang={lang}
-            memos={memos}
-            openEvents={openEvents}
+            projects={projects}
             photos={photos}
             widget={widget}
             onNavigate={props.onNavigate}
+            onProjects={props.onProjects}
           />
         ))}
       </section>
@@ -1001,21 +1022,21 @@ function DashboardWidget({
   events,
   journal,
   lang,
-  memos,
-  openEvents,
+  projects,
   photos,
   widget,
   onNavigate,
+  onProjects,
 }: {
   agentInbox: AgentInboxItem[]
   events: CalendarEvent[]
   journal: string
   lang: Lang
-  memos: MemoItem[]
-  openEvents: number
+  projects: ProjectPlan[]
   photos: PhotoItem[]
   widget: Widget
   onNavigate: (page: Page) => void
+  onProjects: (projects: ProjectPlan[]) => void
 }) {
   const [title, eyebrow] = widgetLabels[lang][widget.id]
   return (
@@ -1033,10 +1054,10 @@ function DashboardWidget({
         id={widget.id}
         journal={journal}
         lang={lang}
-        memos={memos}
-        openEvents={openEvents}
+        projects={projects}
         photos={photos}
         onNavigate={onNavigate}
+        onProjects={onProjects}
       />
     </article>
   )
@@ -1047,10 +1068,9 @@ function WidgetIcon({ id }: { id: WidgetId }) {
     health: 'heart',
     agent: 'message',
     journal: 'edit',
-    memo: 'note',
+    projects: 'note',
     photos: 'image',
     summary: 'spark',
-    tasks: 'check',
     timeline: 'calendar',
   }
   return <span className="widget-icon"><Icon name={icon[id] ?? 'spark'} /></span>
@@ -1062,35 +1082,46 @@ function WidgetBody({
   id,
   journal,
   lang,
-  memos,
-  openEvents,
+  projects,
   photos,
   onNavigate,
+  onProjects,
 }: {
   agentInbox: AgentInboxItem[]
   events: CalendarEvent[]
   id: WidgetId
   journal: string
   lang: Lang
-  memos: MemoItem[]
-  openEvents: number
+  projects: ProjectPlan[]
   photos: PhotoItem[]
   onNavigate: (page: Page) => void
+  onProjects: (projects: ProjectPlan[]) => void
 }) {
   if (id === 'timeline') return <CalendarTimeline events={events} lang={lang} onNavigate={onNavigate} />
-  if (id === 'tasks') return <TodayProgress events={events} lang={lang} openEvents={openEvents} onNavigate={onNavigate} />
   if (id === 'agent') return <AgentInboxPreview inbox={agentInbox} lang={lang} onNavigate={onNavigate} />
-  if (id === 'memo') {
+  if (id === 'projects') {
     return (
-      <div className="memo-surface">
-        {memos.slice(0, 2).map((memo) => (
-          <div className="preview-row" key={memo.id}>
-            <strong>{memo.title}</strong>
-            <span>{memo.body || (lang === 'zh' ? '空备忘录' : 'Empty memo')}</span>
+      <div className="project-preview-list">
+        {projects.slice(0, 2).map((project) => (
+          <div className="preview-row" key={project.id}>
+            <strong>{project.title}</strong>
+            <span>{project.startDate} — {project.endDate} · {project.tasks.filter((task) => task.done).length}/{project.tasks.length} {lang === 'zh' ? '项完成' : 'done'}</span>
+            {project.tasks.filter((task) => task.date === dayosToday).map((task) => (
+              <label className="today-project-task" key={task.id}>
+                <input
+                  checked={task.done}
+                  type="checkbox"
+                  onChange={() => onProjects(projects.map((item) => item.id === project.id
+                    ? { ...item, tasks: item.tasks.map((itemTask) => itemTask.id === task.id ? { ...itemTask, done: !itemTask.done } : itemTask) }
+                    : item))}
+                />
+                <span>{task.title}</span>
+              </label>
+            ))}
           </div>
         ))}
-        {memos.length === 0 && <p>{lang === 'zh' ? '还没有备忘录。' : 'No memos yet.'}</p>}
-        <button type="button" onClick={() => onNavigate('memo')}>{lang === 'zh' ? '打开备忘录' : 'Open memos'}</button>
+        {projects.length === 0 && <p>{lang === 'zh' ? '还没有项目计划。' : 'No project plans yet.'}</p>}
+        <button type="button" onClick={() => onNavigate('projects')}>{lang === 'zh' ? '打开项目计划' : 'Open projects'}</button>
       </div>
     )
   }
@@ -1115,8 +1146,8 @@ function WidgetBody({
     <div className="summary-copy">
       <p>
         {lang === 'zh'
-          ? `今天有 ${events.length} 个日程、${memos.length} 条备忘录、${photos.length} 张照片、${agentInbox.length} 条 Agent 消息。`
-          : `Today has ${events.length} events, ${memos.length} memos, ${photos.length} photos, and ${agentInbox.length} Agent messages.`}
+          ? `今天有 ${events.length} 个日程、${projects.length} 个项目、${photos.length} 张照片、${agentInbox.length} 条 Agent 消息。`
+          : `Today has ${events.length} events, ${projects.length} projects, ${photos.length} photos, and ${agentInbox.length} Agent messages.`}
       </p>
       <div className="summary-bars"><span style={{ width: '72%' }} /><span style={{ width: '48%' }} /><span style={{ width: '86%' }} /></div>
     </div>
@@ -1133,33 +1164,14 @@ function CalendarTimeline({ events, lang, onNavigate }: { events: CalendarEvent[
           <time>{event.time}</time>
           <div>
             <strong>{event.title}</strong>
-            <span>{event.date}</span>
+            <span>{event.progress >= 100
+              ? (lang === 'zh' ? '已完成' : 'Complete')
+              : (lang === 'zh' ? `进行中 · ${event.progress}%` : `In progress · ${event.progress}%`)}</span>
             <ProgressBar category={event.category} value={event.progress} />
           </div>
         </div>
       ))}
       <button className="inline-link-button" type="button" onClick={() => onNavigate('calendar')}>{lang === 'zh' ? '打开日历' : 'Open calendar'}</button>
-    </div>
-  )
-}
-
-function TodayProgress({ events, lang, openEvents, onNavigate }: { events: CalendarEvent[]; lang: Lang; openEvents: number; onNavigate: (page: Page) => void }) {
-  return (
-    <div className="task-list">
-      {events.length === 0 ? (
-        <div className="empty-state compact">{lang === 'zh' ? '没有待推进事项。' : 'No active items.'}</div>
-      ) : events.slice(0, 4).map((event) => (
-        <label className={`task-row ${event.category}`} key={event.id}>
-          <input checked={event.progress >= 100} readOnly type="checkbox" />
-          <span>{event.title}</span>
-          <ProgressBar category={event.category} value={event.progress} />
-        </label>
-      ))}
-      <div className="preview-row">
-        <strong>{lang === 'zh' ? '未完成' : 'Open'}</strong>
-        <span>{openEvents} {lang === 'zh' ? '个时间块仍在进行' : 'time blocks still active'}</span>
-      </div>
-      <button className="inline-link-button" type="button" onClick={() => onNavigate('calendar')}>{lang === 'zh' ? '管理进度' : 'Manage progress'}</button>
     </div>
   )
 }
@@ -1218,7 +1230,7 @@ function ModulePage({
   dayOSSettings,
   journal,
   lang,
-  memos,
+  projects,
   page,
   photos,
   onAgentSource,
@@ -1227,7 +1239,7 @@ function ModulePage({
   onCalendarEvents,
   onDayOSSettings,
   onJournal,
-  onMemos,
+  onProjects,
   onPhotos,
 }: {
   agentConfig: AgentConfig
@@ -1236,7 +1248,7 @@ function ModulePage({
   dayOSSettings: DayOSSettings
   journal: string
   lang: Lang
-  memos: MemoItem[]
+  projects: ProjectPlan[]
   page: Page
   photos: PhotoItem[]
   onAgentSource: (source: 'Hermes' | 'OpenClaw') => void
@@ -1245,7 +1257,7 @@ function ModulePage({
   onCalendarEvents: (events: CalendarEvent[]) => void
   onDayOSSettings: (settings: DayOSSettings) => void
   onJournal: (journal: string) => void
-  onMemos: (memos: MemoItem[]) => void
+  onProjects: (projects: ProjectPlan[]) => void
   onPhotos: (photos: PhotoItem[]) => void
 }) {
   if (page === 'calendar') {
@@ -1253,19 +1265,19 @@ function ModulePage({
       <section className="module-page">
         <div className="module-layout">
           <article className="module-card wide-card">
-            <header><p className="eyebrow">{text[lang].calendar}</p><h2>{lang === 'zh' ? '今日时间块' : 'Today blocks'}</h2></header>
-            <EditableCalendar events={calendarEvents} lang={lang} settings={dayOSSettings} onSave={onCalendarEvents} />
+            <header><p className="eyebrow">{text[lang].calendar}</p><h2>{lang === 'zh' ? '当天任务' : 'Today tasks'}</h2></header>
+            <EditableCalendar events={calendarEvents} journal={journal} lang={lang} projects={projects} settings={dayOSSettings} onSave={onCalendarEvents} />
           </article>
-          <article className="module-card"><header><p className="eyebrow">Apple</p><h2>{lang === 'zh' ? '同步计划' : 'Sync plan'}</h2></header><p>{text[lang].appleBridge}</p></article>
+          <CalendarTodayOverview journal={journal} lang={lang} projects={projects} />
         </div>
       </section>
     )
   }
-  if (page === 'memo') {
-    return <ModuleShell eyebrow={text[lang].memo} title={lang === 'zh' ? '备忘录工作台' : 'Memo workspace'}><EditableMemos lang={lang} memos={memos} onSave={onMemos} /></ModuleShell>
+  if (page === 'projects') {
+    return <ModuleShell eyebrow={text[lang].projects} title={lang === 'zh' ? '项目计划工作台' : 'Project planning workspace'}><ProjectPlanner lang={lang} projects={projects} onSave={onProjects} /></ModuleShell>
   }
   if (page === 'journal') {
-    return <ModuleShell eyebrow={text[lang].journal} title={lang === 'zh' ? '每日工作与生活记录' : 'Daily work and life log'}><EditableJournal journal={journal} lang={lang} onSave={onJournal} /></ModuleShell>
+    return <ModuleShell eyebrow={text[lang].journal} title={lang === 'zh' ? `${dayosToday} 日记` : `${dayosToday} Journal`}><EditableJournal journal={journal} lang={lang} onSave={onJournal} /></ModuleShell>
   }
   if (page === 'photos') {
     return <ModuleShell eyebrow={text[lang].photos} title={lang === 'zh' ? '照片与饮食记录' : 'Photos and meal log'}><EditablePhotos lang={lang} photos={photos} onSave={onPhotos} /></ModuleShell>
@@ -1297,6 +1309,24 @@ function ModulePage({
   )
 }
 
+function CalendarTodayOverview({ journal, lang, projects }: { journal: string; lang: Lang; projects: ProjectPlan[] }) {
+  const tasks = projects.flatMap((project) => project.tasks
+    .filter((task) => task.date === dayosToday)
+    .map((task) => ({ ...task, projectTitle: project.title })))
+  return (
+    <article className="module-card calendar-today-overview">
+      <header><p className="eyebrow">{dayosToday}</p><h2>{lang === 'zh' ? '今日项目与日记' : 'Today’s projects & journal'}</h2></header>
+      {tasks.length > 0 ? tasks.map((task) => (
+        <div className="calendar-project-task" key={task.id}>
+          <input aria-label={task.title} checked={task.done} readOnly type="checkbox" />
+          <div><strong>{task.title}</strong><span>{task.projectTitle} · {task.done ? (lang === 'zh' ? '已打卡' : 'Checked in') : (lang === 'zh' ? '待打卡' : 'To check in')}</span></div>
+        </div>
+      )) : <p>{lang === 'zh' ? '今天没有项目打卡事项。' : 'No project check-ins today.'}</p>}
+      {journal.trim() && <article className="calendar-journal"><strong>{lang === 'zh' ? '日记' : 'Journal'}</strong><p>{journal}</p></article>}
+    </article>
+  )
+}
+
 function getMonthDays(selectedDate: string) {
   const [year, month] = selectedDate.split('-').map(Number)
   const first = new Date(year, month - 1, 1)
@@ -1322,12 +1352,16 @@ function getMonthDays(selectedDate: string) {
 
 function EditableCalendar({
   events,
+  journal,
   lang,
+  projects,
   settings,
   onSave,
 }: {
   events: CalendarEvent[]
+  journal: string
   lang: Lang
+  projects: ProjectPlan[]
   settings: DayOSSettings
   onSave: (events: CalendarEvent[]) => void
 }) {
@@ -1336,6 +1370,7 @@ function EditableCalendar({
   const [syncStatus, setSyncStatus] = useState('')
 
   const visibleEvents = drafts.filter((event) => event.date === selectedDate)
+  const projectTasks = projects.flatMap((project) => project.tasks.map((task) => ({ ...task, projectTitle: project.title })))
   const monthDays = getMonthDays(selectedDate)
   const selectedMonth = selectedDate.slice(0, 7)
 
@@ -1412,6 +1447,8 @@ function EditableCalendar({
         <div className="calendar-month-grid">
           {monthDays.map((day) => {
             const count = drafts.filter((event) => event.date === day.date).length
+              + projectTasks.filter((task) => task.date === day.date).length
+              + (day.date === dayosToday && journal.trim() ? 1 : 0)
             return (
               <button
                 className={`${day.inMonth ? '' : 'muted'} ${day.date === selectedDate ? 'active' : ''}`}
@@ -1431,7 +1468,7 @@ function EditableCalendar({
         <div className="time-block-heading">
           <div>
             <p className="eyebrow">{selectedDate}</p>
-            <h3>{lang === 'zh' ? '当天时间块' : 'Day time blocks'}</h3>
+            <h3>{lang === 'zh' ? '当天任务' : 'Day tasks'}</h3>
           </div>
           <span>{visibleEvents.length} {lang === 'zh' ? '条日程' : 'events'}</span>
         </div>
@@ -1448,7 +1485,11 @@ function EditableCalendar({
                 <option value="health">{lang === 'zh' ? '健康' : 'Health'}</option>
                 <option value="agent">Agent</option>
               </select>
-              <input aria-label="Progress" defaultValue={event.progress} max="100" min="0" name={`${event.id}.progress`} type="number" />
+              <label className="calendar-progress-input">
+                <span>{lang === 'zh' ? '完成比例' : 'Completion'}</span>
+                <input aria-label={lang === 'zh' ? '完成比例（%）' : 'Completion percentage'} defaultValue={event.progress} max="100" min="0" name={`${event.id}.progress`} type="number" />
+                <b>%</b>
+              </label>
               <ProgressBar category={event.category} value={event.progress} />
             </div>
           ))
@@ -1464,48 +1505,106 @@ function EditableCalendar({
   )
 }
 
-function EditableMemos({ lang, memos, onSave }: { lang: Lang; memos: MemoItem[]; onSave: (memos: MemoItem[]) => void }) {
-  const [drafts, setDrafts] = useState(memos)
+function ProjectPlanner({ lang, projects, onSave }: { lang: Lang; projects: ProjectPlan[]; onSave: (projects: ProjectPlan[]) => void }) {
+  const [draft, setDraft] = useState<ProjectPlan>(createEmptyProject)
 
-  function addMemo() {
-    setDrafts((current) => [
-      ...current,
-      { id: `memo-${Date.now()}`, title: lang === 'zh' ? '新的备忘录' : 'New memo', body: '' },
-    ])
+  function updateDraft(update: Partial<ProjectPlan>) {
+    setDraft((current) => ({ ...current, ...update }))
   }
 
-  function saveMemoForm(form: HTMLFormElement) {
-    const formData = new FormData(form)
-    const nextMemos = drafts.map((draft) => ({
-      id: draft.id,
-      title: String(formData.get(`${draft.id}.title`) ?? draft.title),
-      body: String(formData.get(`${draft.id}.body`) ?? draft.body),
-    }))
-    setDrafts(nextMemos)
-    onSave(nextMemos)
+  function addDraftTask() {
+    updateDraft({
+      tasks: [...draft.tasks, {
+        id: `task-${Date.now()}`, date: draft.startDate, title: lang === 'zh' ? '新的打卡事项' : 'New check-in item', done: false,
+      }],
+    })
   }
 
-  function saveMemos(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    saveMemoForm(event.currentTarget)
+  function toggleSavedTask(project: ProjectPlan, taskId: string) {
+    const nextProjects = projects.map((item) => item.id === project.id
+      ? { ...item, tasks: item.tasks.map((task) => task.id === taskId ? { ...task, done: !task.done } : task) }
+      : item)
+    onSave(nextProjects)
+  }
+
+  function saveDraft() {
+    if (!draft.title.trim()) return
+    onSave([...projects, { ...draft, title: draft.title.trim(), goal: draft.goal.trim() }])
+    setDraft(createEmptyProject())
   }
 
   return (
-    <form className="editor-stack" onSubmit={saveMemos}>
-      <div className="note-board editable">
-        {drafts.map((memo) => (
-          <article className="note-card editable" key={memo.id}>
-            <input aria-label="Memo title" defaultValue={memo.title} name={`${memo.id}.title`} />
-            <textarea aria-label="Memo body" defaultValue={memo.body} name={`${memo.id}.body`} />
-          </article>
-        ))}
-      </div>
-      <div className="editor-actions">
-        <button type="button" onClick={addMemo}>{lang === 'zh' ? '新增备忘录' : 'Add memo'}</button>
-        <button className="primary-action" type="button" onClick={(event) => saveMemoForm(event.currentTarget.form!)}>{lang === 'zh' ? '保存备忘录' : 'Save memos'}</button>
-      </div>
-    </form>
+    <div className="editor-stack">
+      <section className="saved-projects-section">
+        <div className="planner-section-heading"><div><p className="eyebrow">{lang === 'zh' ? '执行中的计划' : 'Active plans'}</p><h3>{lang === 'zh' ? '项目进度' : 'Project progress'}</h3></div><span>{projects.length} {lang === 'zh' ? '个计划' : 'plans'}</span></div>
+        {projects.length === 0 ? <div className="empty-state">{lang === 'zh' ? '还没有已保存的计划。请在下方新建第一个计划。' : 'No saved plans yet. Create your first plan below.'}</div> : (
+          <div className="saved-project-list">
+            {projects.map((project) => {
+              const doneCount = project.tasks.filter((task) => task.done).length
+              const percent = project.tasks.length ? Math.round((doneCount / project.tasks.length) * 100) : 0
+              const todayTasks = project.tasks.filter((task) => task.date === dayosToday)
+              return (
+                <article className="saved-project-card" key={project.id}>
+                  <div className="saved-project-header"><div><h4>{project.title}</h4><p>{project.goal || (lang === 'zh' ? '尚未填写项目说明' : 'No project description')}</p></div><strong>{percent}%</strong></div>
+                  <div className="saved-project-meta"><span>{project.startDate}</span><i>→</i><span>{project.endDate}</span><b>{doneCount}/{project.tasks.length} {lang === 'zh' ? '项完成' : 'done'}</b></div>
+                  <ProgressBar category="work" value={percent} />
+                  <div className="saved-project-today"><strong>{lang === 'zh' ? '今日打卡' : 'Today’s check-in'}</strong>{todayTasks.length ? todayTasks.map((task) => (
+                    <button className={`saved-task-button ${task.done ? 'done' : ''}`} type="button" key={task.id} onClick={() => toggleSavedTask(project, task.id)}>
+                      <Icon name="check" /><span>{task.title}</span>
+                    </button>
+                  )) : <span>{lang === 'zh' ? '今天没有安排事项。' : 'No task scheduled today.'}</span>}</div>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="new-project-section">
+        <div className="planner-section-heading"><div><p className="eyebrow">{lang === 'zh' ? '新建计划' : 'New plan'}</p><h3>{lang === 'zh' ? '拆解下一项目' : 'Plan your next project'}</h3></div></div>
+        <div className="project-intro"><strong>{lang === 'zh' ? '把长期目标拆成每天可完成的事项。' : 'Turn long-term goals into daily, checkable actions.'}</strong><span>{lang === 'zh' ? 'AI 会根据目标和周期生成初稿；保存后将进入上方的执行计划。' : 'AI drafts tasks from your goal and dates; save it to start tracking above.'}</span></div>
+        <article className="project-card draft-project-card">
+          <div className="project-fields">
+            <input aria-label="Project title" value={draft.title} onChange={(event) => updateDraft({ title: event.target.value })} placeholder={lang === 'zh' ? '项目名称，例如：三个月背 3000 个单词' : 'Project title'} />
+            <textarea aria-label="Project goal" value={draft.goal} onChange={(event) => updateDraft({ goal: event.target.value })} placeholder={lang === 'zh' ? '写下项目目标与说明' : 'Describe your goal'} />
+            <div className="project-dates"><label>{lang === 'zh' ? '开始' : 'Start'}<input type="date" value={draft.startDate} onChange={(event) => updateDraft({ startDate: event.target.value })} /></label><label>{lang === 'zh' ? '结束' : 'End'}<input type="date" value={draft.endDate} onChange={(event) => updateDraft({ endDate: event.target.value })} /></label><span>{draft.tasks.length} {lang === 'zh' ? '项待拆解' : 'tasks drafted'}</span></div>
+          </div>
+          <div className="project-actions"><button type="button" onClick={() => updateDraft({ tasks: createAiProjectTasks(draft, lang) })}>{lang === 'zh' ? 'AI 拆解事项' : 'AI breakdown'}</button><button type="button" onClick={addDraftTask}>{lang === 'zh' ? '手动添加事项' : 'Add task'}</button></div>
+          {draft.tasks.length > 0 && <div className="project-task-list">{draft.tasks.map((task) => <div className="project-task" key={task.id}><span className="task-draft-mark"><Icon name="check" /></span><input aria-label="Task date" type="date" value={task.date} onChange={(event) => updateDraft({ tasks: draft.tasks.map((item) => item.id === task.id ? { ...item, date: event.target.value } : item) })} /><input aria-label="Task title" value={task.title} onChange={(event) => updateDraft({ tasks: draft.tasks.map((item) => item.id === task.id ? { ...item, title: event.target.value } : item) })} /></div>)}</div>}
+          <div className="editor-actions"><button className="primary-action" type="button" onClick={saveDraft}>{lang === 'zh' ? '保存并开始执行' : 'Save and start'}</button></div>
+        </article>
+      </section>
+    </div>
   )
+}
+
+function createEmptyProject(): ProjectPlan {
+  return { id: `project-${Date.now()}`, title: '', goal: '', startDate: dayosToday, endDate: dayosToday, tasks: [] }
+}
+
+function createAiProjectTasks(project: ProjectPlan, lang: Lang): ProjectTask[] {
+  const start = new Date(`${project.startDate}T00:00:00`)
+  const end = new Date(`${project.endDate}T00:00:00`)
+  const days = Math.max(1, Math.min(180, Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1))
+  const target = Number(project.goal.match(/(\d{2,5})\s*(?:个)?(?:单词|词|words?)/i)?.[1])
+  const dailyTarget = target ? Math.ceil(target / days) : 0
+  const isTrip = /旅行|出游|旅游|trip|travel/i.test(`${project.title} ${project.goal}`)
+
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    const dateText = date.toISOString().slice(0, 10)
+    const title = isTrip
+      ? `${projectDayLabel(index + 1, lang)}${lang === 'zh' ? '：打卡当天景点并记录行程' : ': Check in at sights and log the itinerary'}`
+      : dailyTarget
+        ? `${projectDayLabel(index + 1, lang)}${lang === 'zh' ? `：学习 ${dailyTarget} 个新词，并复习已学内容` : `: Learn ${dailyTarget} new words and review`}`
+        : `${projectDayLabel(index + 1, lang)}${lang === 'zh' ? `：推进「${project.title || '项目'}」的每日目标` : `: Advance the daily goal for “${project.title || 'project'}”`}`
+    return { id: `ai-task-${project.id}-${index}`, date: dateText, title, done: false }
+  })
+}
+
+function projectDayLabel(day: number, lang: Lang) {
+  return lang === 'zh' ? `第 ${day} 天` : `Day ${day}`
 }
 
 function EditableJournal({ journal, lang, onSave }: { journal: string; lang: Lang; onSave: (journal: string) => void }) {
@@ -1527,12 +1626,25 @@ function EditableJournal({ journal, lang, onSave }: { journal: string; lang: Lan
           onSave(String(formData.get('journal') ?? journal))
         }}>{lang === 'zh' ? '保存日记' : 'Save journal'}</button>
       </div>
+      {journal.trim() && (
+        <article className="saved-journal-entry">
+          <div><p className="eyebrow">{dayosToday}</p><strong>{lang === 'zh' ? '已保存记录' : 'Saved entry'}</strong></div>
+          <p>{journal}</p>
+        </article>
+      )}
     </form>
   )
 }
 
 function EditablePhotos({ lang, photos, onSave }: { lang: Lang; photos: PhotoItem[]; onSave: (photos: PhotoItem[]) => void }) {
   const [drafts, setDrafts] = useState(photos)
+  const [activePhoto, setActivePhoto] = useState<PhotoItem | null>(null)
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null)
+  const [analysisStatus, setAnalysisStatus] = useState('')
+
+  function updatePhoto(id: string, update: Partial<PhotoItem>) {
+    setDrafts((current) => current.map((photo) => photo.id === id ? { ...photo, ...update } : photo))
+  }
 
   function savePhotoMeta(form: HTMLFormElement) {
     const formData = new FormData(form)
@@ -1561,6 +1673,27 @@ function EditablePhotos({ lang, photos, onSave }: { lang: Lang; photos: PhotoIte
     onSave(nextPhotos)
   }
 
+  async function analyzePhoto(photo: PhotoItem) {
+    setAnalyzingId(photo.id)
+    setAnalysisStatus(lang === 'zh' ? 'AI 正在识别图片内容…' : 'AI is analyzing the photo…')
+    try {
+      const analysis = await apiJson<{ label: string; note: string }>('/api/photos/analyze', {
+        body: JSON.stringify({ src: photo.src, label: photo.label, note: photo.note }),
+        method: 'POST',
+      })
+      const nextPhotos = drafts.map((item) => item.id === photo.id ? { ...item, label: analysis.label, note: analysis.note } : item)
+      setDrafts(nextPhotos)
+      onSave(nextPhotos)
+      setActivePhoto((current) => current?.id === photo.id ? { ...current, label: analysis.label, note: analysis.note } : current)
+      setAnalysisStatus(lang === 'zh' ? '识别结果已保存。' : 'Analysis saved.')
+    } catch (error) {
+      setAnalysisStatus(lang === 'zh' ? '识别失败：请在 AI Agent 中配置支持图像的接口和密钥。' : 'Analysis failed: configure an image-capable AI endpoint and key in AI Agent.')
+      console.warn(error)
+    } finally {
+      setAnalyzingId(null)
+    }
+  }
+
   return (
     <form className="editor-stack" onSubmit={(event) => { event.preventDefault(); savePhotoMeta(event.currentTarget) }}>
       <label className="photo-upload-control">
@@ -1574,10 +1707,13 @@ function EditablePhotos({ lang, photos, onSave }: { lang: Lang; photos: PhotoIte
         ) : (
           drafts.map((photo) => (
             <article className="saved-photo-card" key={photo.id}>
-              <img alt={photo.label} src={photo.src} />
-              <input aria-label="Photo label" defaultValue={photo.label} name={`${photo.id}.label`} />
-              <textarea aria-label="Photo note" defaultValue={photo.note} name={`${photo.id}.note`} />
+              <button className="photo-thumbnail-button" type="button" onClick={() => setActivePhoto(photo)} aria-label={lang === 'zh' ? `放大查看：${photo.label}` : `View ${photo.label}`}>
+                <img alt={photo.label} src={photo.src} />
+              </button>
+              <input aria-label="Photo label" value={photo.label} name={`${photo.id}.label`} onChange={(event) => updatePhoto(photo.id, { label: event.target.value })} />
+              <textarea aria-label="Photo note" value={photo.note} name={`${photo.id}.note`} onChange={(event) => updatePhoto(photo.id, { note: event.target.value })} />
               <span>{photo.createdAt}</span>
+              <button type="button" onClick={() => analyzePhoto(photo)} disabled={analyzingId === photo.id}>{analyzingId === photo.id ? (lang === 'zh' ? '识别中…' : 'Analyzing…') : (lang === 'zh' ? 'AI 识别图片' : 'Analyze with AI')}</button>
             </article>
           ))
         )}
@@ -1585,6 +1721,17 @@ function EditablePhotos({ lang, photos, onSave }: { lang: Lang; photos: PhotoIte
       <div className="editor-actions">
         <button className="primary-action" type="button" onClick={(event) => savePhotoMeta(event.currentTarget.form!)}>{lang === 'zh' ? '保存照片记录' : 'Save photo log'}</button>
       </div>
+      {analysisStatus && <p className="api-status">{analysisStatus}</p>}
+      {activePhoto && (
+        <div className="photo-lightbox" role="dialog" aria-modal="true" aria-label={activePhoto.label} onClick={() => setActivePhoto(null)}>
+          <article onClick={(event) => event.stopPropagation()}>
+            <button className="lightbox-close" type="button" onClick={() => setActivePhoto(null)} aria-label="Close">×</button>
+            <img alt={activePhoto.label} src={activePhoto.src} />
+            <strong>{activePhoto.label}</strong>
+            <p>{activePhoto.note}</p>
+          </article>
+        </div>
+      )}
     </form>
   )
 }
